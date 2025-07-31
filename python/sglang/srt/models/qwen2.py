@@ -73,6 +73,12 @@ class Qwen2MLP(nn.Module):
             quant_config=quant_config,
             prefix=add_prefix("gate_up_proj", prefix),
         )
+        print("xueh self.gate_up_proj", type(self.gate_up_proj.weight), self.gate_up_proj.weight.shape)
+        self.weight_loader = self.gate_up_proj.weight.weight_loader
+        self.weight_scale_loader = self.gate_up_proj.weight_scale.weight_loader
+        self.load_merged_column_weight = self.gate_up_proj.weight.load_merged_column_weight
+        self.load_merged_column_weight_scale = self.gate_up_proj.weight_scale.load_merged_column_weight
+
         self.down_proj = RowParallelLinear(
             intermediate_size,
             hidden_size,
@@ -139,6 +145,15 @@ class Qwen2Attention(nn.Module):
             quant_config=quant_config,
             prefix=add_prefix("qkv_proj", prefix),
         )
+        print("xueh self.qkv_proj", type(self.qkv_proj.weight), self.qkv_proj.weight.shape)
+        self.weight_loader = self.qkv_proj.weight.weight_loader
+        self.load_merged_column_weight = self.qkv_proj.weight.load_merged_column_weight
+        self.load_qkv_weight = self.qkv_proj.weight.load_qkv_weight
+
+        self.weight_scale_loader = self.qkv_proj.weight_scale.weight_loader
+        self.load_merged_column_weight_scale = self.qkv_proj.weight_scale.load_merged_column_weight
+        self.load_qkv_weight_scale = self.qkv_proj.weight_scale.load_qkv_weight
+
         self.o_proj = RowParallelLinear(
             self.total_num_heads * self.head_dim,
             hidden_size,
@@ -511,7 +526,27 @@ class Qwen2ForCausalLM(nn.Module):
                 if name.endswith(".bias") and name not in params_dict:
                     continue
                 param = params_dict[name]
-                weight_loader = param.weight_loader
+                #weight_loader = param.weight_loader
+                print(f"xueh weight_loader1 {name}, {param.shape}, {loaded_weight.shape}")
+                if hasattr(param, "weight_loader"):
+                    weight_loader = param.weight_loader
+                    print(f"xueh weight_loader1 {name} has weight_loader {weight_loader}")
+                elif 'qkv_proj' in name:
+                    if 'scale' in name:
+                        weight_loader = self.model.layers[layer_id].self_attn.weight_scale_loader
+                        param.load_merged_column_weight = self.model.layers[layer_id].self_attn.load_merged_column_weight_scale
+                        param.load_qkv_weight = self.model.layers[layer_id].self_attn.load_qkv_weight_scale
+                    else:
+                        weight_loader = self.model.layers[layer_id].self_attn.weight_loader
+                        param.load_merged_column_weight = self.model.layers[layer_id].self_attn.load_merged_column_weight
+                        param.load_qkv_weight = self.model.layers[layer_id].self_attn.load_qkv_weight
+                elif 'gate_up_proj' in name:
+                    if 'scale' in name:
+                        weight_loader = self.model.layers[layer_id].mlp.weight_scale_loader
+                        param.load_merged_column_weight = self.model.layers[layer_id].mlp.load_merged_column_weight_scale
+                    else:
+                        weight_loader = self.model.layers[layer_id].mlp.weight_loader
+                        param.load_merged_column_weight = self.model.layers[layer_id].mlp.load_merged_column_weight
                 weight_loader(param, loaded_weight, shard_id)
                 break
             else:
