@@ -317,6 +317,26 @@ class Fp8LinearMethod(LinearMethodBase):
             else:
                 layer.register_parameter("input_scale", None)
 
+
+    def process_weights_before_loading(self, layer: Module) -> None:
+        weight_loader = self.weight_loader
+        # WEIGHT
+        weight_dtype = (
+            torch.float8_e4m3fn
+            if self.quant_config.is_checkpoint_fp8_serialized
+            else self.params_dtype
+        )
+        if not self.quant_config.is_checkpoint_fp8_serialized:
+            layer.weight = ModelWeightParameter(
+                data=torch.empty(
+                    layer.output_size_per_partition, layer.input_size_per_partition, dtype=weight_dtype
+                ),
+                input_dim=1,
+                output_dim=0,
+                weight_loader=weight_loader,
+            )
+
+
     def process_weights_after_loading(self, layer: Module) -> None:
         # Block quant doesn't need to process weights after loading
         if self.block_quant:

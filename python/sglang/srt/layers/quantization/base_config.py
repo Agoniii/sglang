@@ -34,6 +34,12 @@ class QuantizeMethodBase(ABC):
         """
         return
 
+    def process_weights_before_loading(self, layer: nn.Module) -> None:
+        """Process the weight after loading.
+
+        This can be used for example, to transpose weights for computation.
+        """
+        return
 
 class QuantizationConfig(ABC):
     """Base class for quantization configs."""

@@ -778,7 +778,17 @@ class ModelRunner:
             custom_loader = dynamic_import(load_format)
             custom_loader(self.model, named_tensors)
         elif load_format is None:
+            with torch.device(self.device):
+                for name, module in self.model.named_modules():
+                    quant_method = getattr(module, "quant_method", None)
+                    if quant_method is not None:
+                        quant_method.process_weights_before_loading(module)
             self.model.load_weights(named_tensors)
+            with torch.device(self.device):
+                for name, module in self.model.named_modules():
+                    quant_method = getattr(module, "quant_method", None)
+                    if quant_method is not None:
+                        quant_method.process_weights_after_loading(module)
         else:
             raise NotImplementedError(f"Unknown load_format={load_format}")
         return True, "Success"
