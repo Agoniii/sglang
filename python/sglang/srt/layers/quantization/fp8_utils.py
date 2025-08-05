@@ -73,6 +73,7 @@ USE_ROWWISE_TORCH_SCALED_MM = use_rowwise_torch_scaled_mm()
 
 
 def cutlass_fp8_supported():
+    return False
     if not _is_cuda:
         return False
     major, minor = get_device_capability()

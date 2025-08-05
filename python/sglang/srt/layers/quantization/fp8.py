@@ -111,6 +111,7 @@ class Fp8Config(QuantizationConfig):
         ignored_layers: Optional[List[str]] = None,
         weight_block_size: List[int] = None,
     ) -> None:
+        is_checkpoint_fp8_serialized = True
         self.is_checkpoint_fp8_serialized = is_checkpoint_fp8_serialized
         if is_checkpoint_fp8_serialized:
             log_info_on_rank0(logger, "Detected fp8 checkpoint.")
@@ -317,7 +318,87 @@ class Fp8LinearMethod(LinearMethodBase):
             else:
                 layer.register_parameter("input_scale", None)
 
-    def process_weights_after_loading(self, layer: Module) -> None:
+    def process_weights_after_loading(self, layer) -> None:
+        print(f"xueh process_weights_after_loading {self.block_quant=}, {self.quant_config.is_checkpoint_fp8_serialized=}")
+
+        def _create_param_from_subclass_attributes(custom_param):
+            param = Parameter(custom_param.data, requires_grad=False)
+            base_param_dir = dir(torch.nn.Parameter)
+            custom_param_dir = dir(custom_param)
+            # Find the attributes that are unique to the custom parameter
+            custom_attributes = [
+                attr
+                for attr in custom_param_dir
+                if attr not in base_param_dir and not attr.startswith("__")
+            ]
+            # Set the custom attributes into the base parameter object
+            for attr in custom_attributes:
+                setattr(param, attr, getattr(custom_param, attr))
+
+            param.subclass_type = type(custom_param)
+            return param
+
+        if self.block_quant:
+            assert self.block_quant and self.quant_config.is_checkpoint_fp8_serialized
+            assert self.quant_config.activation_scheme == "dynamic"
+            weight = layer.weight.data
+            weight_scale_inv = layer.weight_scale_inv.data
+
+            layer.weight = _create_param_from_subclass_attributes(
+                ModelWeightParameter(
+                    data=weight,
+                    output_dim=0,
+                    input_dim=1,
+                    weight_loader=layer.weight.weight_loader,
+                )
+            )
+            layer.weight_scale_inv = _create_param_from_subclass_attributes(
+                BlockQuantScaleParameter(
+                    data=weight_scale_inv,
+                    output_dim=0,
+                    input_dim=1,
+                    weight_loader=layer.weight_scale_inv.weight_loader,
+                )
+            )
+
+        else:
+            weight = layer.weight.data
+            weight_scale = layer.weight_scale.data
+
+            # # If using w8a8, torch._scaled_mm needs per tensor, so
+            # # requantize the logical shards as a single weight.
+            if not self.use_marlin:
+                # Dequant -> Quant with max scale so we can run per tensor.
+
+                weight_scale, weight = requantize_with_max_scale(
+                    weight=weight,
+                    weight_scale=weight_scale,
+                    logical_widths=layer.logical_widths,
+                )
+
+            # Update layer with new values.
+            # layer.weight = Parameter(weight.t(), requires_grad=False)
+            # layer.weight_scale = Parameter(weight_scale, requires_grad=False)
+
+            layer.weight = _create_param_from_subclass_attributes(
+                ModelWeightParameter(
+                    data=weight,
+                    output_dim=0,
+                    input_dim=1,
+                    weight_loader=layer.weight.weight_loader,
+                )
+            )
+            layer.weight_scale = _create_param_from_subclass_attributes(
+                PerTensorScaleParameter(
+                    data=weight_scale.repeat(len(layer.logical_widths)),
+                    #data=weight_scale.unsqueeze(0).expand(len(layer.logical_widths)),
+                    weight_loader=layer.weight_scale.weight_loader,
+                )
+            )
+            print(f"xueh after {layer.weight.shape=}")
+            print(f"xueh after {layer.weight_scale.shape=}")
+
+    def process_weights_after_loading2(self, layer: Module) -> None:
         # Block quant doesn't need to process weights after loading
         if self.block_quant:
             # If ROCm, normalize the weights and scales to e4m3fnuz
@@ -435,10 +516,15 @@ class Fp8LinearMethod(LinearMethodBase):
                 bias=bias,
             )
 
+        weight_scale, weight = requantize_with_max_scale(
+                weight=layer.weight,
+                weight_scale=layer.weight_scale,
+                logical_widths=layer.logical_widths,
+        )
         return apply_fp8_linear(
             input=x,
-            weight=layer.weight,
-            weight_scale=layer.weight_scale,
+            weight=weight.t(),
+            weight_scale=weight_scale,
             input_scale=layer.input_scale,
             bias=bias,
             cutlass_fp8_supported=self.cutlass_fp8_supported,

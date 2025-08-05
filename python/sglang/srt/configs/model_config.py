@@ -81,6 +81,14 @@ class ModelConfig:
             model_override_args=self.model_override_args,
             **kwargs,
         )
+        FP8_BLOCK_QUANT_KWARGS = {
+            "activation_scheme": "dynamic",
+            "fmt": "e4m3",
+            "quant_method": "fp8",
+            "weight_block_size": [128, 128],
+        }
+        fp8_block_quant_kwargs = dict(FP8_BLOCK_QUANT_KWARGS)
+        setattr(self.hf_config, "quantization_config", fp8_block_quant_kwargs)
 
         self.hf_text_config = get_hf_text_config(self.hf_config)
         self.attention_chunk_size = getattr(

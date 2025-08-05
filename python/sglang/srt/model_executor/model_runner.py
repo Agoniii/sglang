@@ -778,7 +778,17 @@ class ModelRunner:
             custom_loader = dynamic_import(load_format)
             custom_loader(self.model, named_tensors)
         elif load_format is None:
+            # Monkey patch the param class to their subclass, as certain models
+            # will check the param type to call the proper weightloader
+            for name, param in self.model.named_parameters():
+                if hasattr(param, "subclass_type"):
+                    param.orig_type = param.__class__
+                    param.__class__ = param.subclass_type
             self.model.load_weights(named_tensors)
+            # Undo the type change above to the original type
+            for name, param in self.model.named_parameters():
+                if hasattr(param, "subclass_type"):
+                    param.__class__ = param.orig_type
         else:
             raise NotImplementedError(f"Unknown load_format={load_format}")
         return True, "Success"
